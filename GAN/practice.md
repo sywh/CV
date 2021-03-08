@@ -1,0 +1,33 @@
+# practice
+## 避免GAN训练崩溃
+- 采样：
+  - 不要在均匀分布上采样，应该在高斯分布上采样
+  - 一个mini-batch里面必须只有正样本，或者负样本，不要混在一起
+- 网络结构：
+  - Generator:
+    - 最后一层使用tanh激活函数
+  - Discriminator:
+  - Norm: 如果用不了Batch Norm，可以用Instance Norm
+  - 避免稀疏梯度：少用ReLU, MaxPool
+    - 可以用LeakeyReLU代替ReLU
+    - 下采样可以用Average Pooling或者strided convolution替代
+    - 上采样可以用PixelShuffle，ConvTranspose2d + stride
+- 损失函数：
+  - Generator:
+    - loss采用min(log(1-D(G(z))))，因为原始的生成器loss存在梯度消失问题
+  - 使用WGAN-GP, LSGAN
+- 优化器：
+  - Generator使用Adam，Discriminator使用SGD
+- 调试：
+  - 判别器loss为0，说明训练失败了；
+  - 生成器loss稳步下降，说明判别器没发挥作用
+  - 不要试着通过比较生成器和判别器loss的大小，来解决训练过程中的模型坍塌问题
+- 其它：
+  - 归一化图像输入到(-1, 1)之间
+  - 给标签加噪声：训练判别器的时候，考虑反转标签，real=fake, fake=real
+  - 平滑标签：对于正样本，可以使用0.7-1.0的随机数替代；对于负样本，可以用0-0.3的随机数替代
+  - **如果有标签，请尽量利用标签信息来训练**
+  - 使用混合模型：KL+GAN, VAE+GAN
+  - 给判别器的输入加一些噪声，给G的每一层加一些人工噪声
+  - 多训练判别器，尤其是加了噪声的时候
+  - 对于生成器，在训练，测试的时候使用Dropout
