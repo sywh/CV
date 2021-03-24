@@ -1,0 +1,74 @@
+# recurrent
+## RNN
+- 组成
+  - 输入：x1,...,xT
+    - xt是长度为n_input的列向量
+  - 隐藏层：h1,...hT
+    - ht是长度为n_hidden的列向量
+    - ht由xt和ht-1经过变换（权重矩阵乘法+偏置）得到，并过一遍tanh
+  - 输出：y1,...,yT
+    - yt是长度为n_output的列向量
+    - yt由ht经过变换得到
+  - 简单表示
+    - yt = RNN(xt, ht-1) = RNN(xt, xt-1,..., x2, x1)
+- 权值共享
+  - 对于任意时刻t，所有的权值都相等，这就是RNN中的"权值共享"，极大地减少参数量
+- 细节
+  - 在t=1时刻，如果没有特别指定初始状态，一般都会使用全0的h0作为初始状态输入
+## Seq2Seq
+- 流程
+  - 编码器Encoder把所有的输入序列都编码成一个统一的语义向量Context
+  - 再由解码器Decoder解码。在解码器Decoder解码的过程中，不断地将前一个时刻 t-1的输出作为后一个时刻t的输入，循环解码，直到输出停止符为止。
+- 机器翻译
+  - 例子：通过Seq2Seq结构把中文“早上好”翻译成英文"Good morning"
+  - 将"早上好"通过Encoder编码，并将最后 t=3 时刻的隐藏层状态 h3 作为语义向量
+  - 以语义向量为Decoder的 h0 状态，同时在 t=1 时刻输入<start>特殊标识符，开始解码。之后不断的将前一时刻输出作为下一时刻输入进行解码，直接输出<stop>特殊标识符结束。Decoder端的 t 时刻数据流
+    - 首先对RNN输入大小为 [ni, 1] 的向量 xt ;
+    - 然后经过RNN输出大小为 [no, 1] 的向量 yt （蓝点）;
+    - 接着使用全连接fc将 yt 变为大小为 [nc, 1] 的向量 yt' ，其中nc代表类别数量
+    - 再将 yt' 经过softmax和argmax获取类别index，再经过int2str获取输出字符
+    - 最后将类别index输入到下一状态，直到接收到<stop>标志符停止
+  - embedding
+    - 将前一时刻输出类别index（数值）送入下一时刻输入（向量）进行解码。已知<start>标志符index为0，如果需要将<start>标志符输入到input层，就需要把类别index=0转变为一个 [ni, 1] 长度的特定对应向量。这时就需要应用嵌入 (embedding) 方法
+    - 假设有 nc 个词，最简单的方法就是使用 nc 长度的one-hot编码，但使用one-hot编码进行嵌入过于稀疏
+    - 更优雅的办法
+      - 首先随机生成一个大小为 [nc, ni] embedding随机矩阵
+      - 然后通过start标志的one-hot编码乘以embedding矩阵（即获取embedding矩阵的第 i<start>=0 行），作为start标志对应的输入向量送入网络，即通过one-hot编码选取embedding矩阵中的某一行作为输入
+      - 在 t=1 时刻网络输入 x1 后输出了good字符，那么要在 t=2 时刻再把good字符的one-hot编码乘以embedding矩阵获取 x2，依次类推
+    - Seq2Seq引入嵌入机制解决从label index数值到输入向量的维度恢复问题。在Tensorflow中上述过程通过以下函数实现tf.nn.embedding_lookup；在pytorch中通过以下接口实现：torch.nn.Embedding。需要注意的是：train和test阶段必须使用一样的embedding矩阵！否则输出肯定是乱码
+    - 当然，还可以使用word2vec/glove/elmo/bert等更加“精致”的嵌入方法，也可以在训练过程中迭代更新embedding。embedding入门可参考https://zhuanlan.zhihu.com/p/89637281
+- Seq2Seq训练问题
+  - 在seq2seq结构中将 yt 作为下一时刻输入 xt+1 进网络，那么某一时刻输出 yt 错误就会导致后面全错。在训练时由于网络尚未收敛，这种蝴蝶效应格外明显。
+  - 为了解决这个问题，Google提出了大名鼎鼎的Scheduled Sampling（即在训练中 xt 按照一定概率选择输入 yt-1 或 t-1 时刻对应的真实值，即标签，如图10），既能加快训练速度，也能提高训练精度。
+- 特点
+  - 与经典RNN结构不同的是，Seq2Seq结构不再要求输入和输出序列有相同的时间长度！
+## Attention
+- 引入原因
+  - Seq2Seq中，encoder把所有的输入序列都编码成一个统一的语义向量Context，然后再由Decoder解码。由于context包含原始序列中的所有信息，它的长度就成了限制模型性能的瓶颈。如机器翻译问题，当要翻译的句子较长时，一个Context可能存不下那么多信息，就会造成精度的下降。
+  - 除此之外，如果按照上述方式实现，只用到了编码器的最后一个隐藏层状态，信息利用率低下。
+  - 所以如果要改进Seq2Seq结构，最好的切入角度就是：利用Encoder所有隐藏层状态 ht 解决Context长度限制问题。
+- 基本思路(Luong Attention)
+  - 由于Encoder的隐藏层状态 ht 代表对不同时刻输入 xt 的编码结果，即Encoder状态h1, h2, h3对应编码器对“早”，“上”，“好”三个中文字符的编码结果。
+  - 那么在Decoder时刻 t=1 通过3个权重w11, w12, w13计算出一个向量c1，然后将这个向量与前一个状态拼接在一起形成一个新的向量输入到隐藏层计算结果，就可以解决Context长度限制问题。
+  - 由于w11, w12, w13不同，就形成了一种对编码器不同输入 xt 对应 ht 的“注意力”机制（权重越大注意力越强）
+- 具体实现
+  - 首先，计算Decoder的 t 时刻隐藏层状态 ht 对Encoder每一个隐藏层状态 hs  权重 at(s) 数值。相似度可以通过Dot，General和Concat三种方式进行计算。
+  - 其次，利用权重 at(s) 计算所有隐藏层状态 hs 加权之和 ct ，即生成新的大小为 [nh, 1] 的Context状态向量
+  - 接下来，将通过权重 at(s) 生成的 ct 与原始Decoder隐藏层 t 时刻状态 ht 拼接在一起。由于拼接后维度会变大，为了恢复为原来形状，乘以全连接Wc矩阵。当然不恢复也可以，但是会造成Decoder RNN cell变大
+  - 最后，对加入“注意力”的Decoder状态 ht乘以 W_ho 矩阵即可获得输出
+- 如何向RNN加入额外信息
+  - Attention机制其实就是将的Encoder RNN隐藏层状态加权后获得权重向量 ct ，额外加入到Decoder中，给Decoder RNN网络添加额外信息，从而使得网络有更完整的信息流。
+  - 所以，假设有额外信息 zt （如上文中的注意力向量 ct ），给RNN网络添加额外信息主要有以下3种方式：
+    - ADD：直接将 zt 叠加在输出 yt 上
+    - CONCAT：将 zt 拼接在隐藏层 ht 后全连接恢复维度（不恢复维度也可以，但是会造成参数量加倍）。上篇文章中的LuongAttention机制就使用此种方法
+    - MLP：新添加一个对 z 的感知单元
+- 可解释性
+  - 在实际应用中当输入一组 x ，除了可以获得输出 y ，还能提取出 xt 与 yt 对应的权重数值 at(s) 并画出来，这样就可以直观的看到时刻 t 注意力机制到底“注意”了什么
+- 总结
+  - 可以看到，整个Attention注意力机制相当于在Seq2Seq结构上加了一层“包装”，内部通过函数 score() 计算注意力向量 ct，从而给Decoder RNN加入额外信息，以提高性能。无论在机器翻译，语音识别，自然语言处理(NLP)，文字识别(OCR)，Attention机制对Seq2Seq结构都有很大的提升。
+## problem
+- 为什么RNN求ht时，需要过tanh?
+- 为什么Scheduled Sampling不全都选择t-1时刻对应的真实值？
+- ct是通过ht计算出来的，还是ht-1计算出来的？
+## reference
+- 知乎 **完全解析RNN, Seq2Seq, Attention注意力机制** https://zhuanlan.zhihu.com/p/51383402
